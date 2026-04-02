@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>校园墙 - 带回帖功能</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>周中校园墙</h1>
+            <button id="adminBtn" class="admin-btn">管理</button>
+        </div>
+
+        <div class="post-form">
+            <textarea id="content" placeholder="分享你的故事..." rows="3" maxlength="500"></textarea>
+            <div class="char-count"><span id="charCount">0</span>/500</div>
+            
+            <div class="image-section">
+                <input type="file" id="imageInput" accept="image/*" multiple style="display:none">
+                <button type="button" id="uploadBtn" class="upload-btn">添加图片 (单次最多6张)</button>
+                <div id="imagePreview" class="image-preview"></div>
+            </div>
+            
+            <div class="form-footer">
+                <input type="text" id="nickname" placeholder="昵称 (选填)">
+                <button id="submitBtn">发布</button>
+            </div>
+        </div>
+
+        <div id="postsContainer" class="posts-container">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 回帖弹窗 -->
+    <div id="replyModal" class="modal">
+        <div class="modal-content">
+            <span class="close-reply">&times;</span>
+            <h3>回复帖子</h3>
+            <div id="replyToPost" style="background:#f5f5f5;padding:10px;border-radius:8px;margin:10px 0;font-size:13px;color:#666;"></div>
+            <textarea id="replyContent" placeholder="写回复..." rows="3" maxlength="300" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:10px;font-family:inherit;"></textarea>
+            <div class="char-count"><span id="replyCharCount">0</span>/300</div>
+            <input type="text" id="replyNickname" placeholder="昵称 (选填)" style="width:100%;margin:10px 0;padding:10px;border:1px solid #ddd;border-radius:8px;">
+            <button id="submitReplyBtn" style="width:100%;padding:10px;background:#4a6fa5;color:white;border:none;border-radius:8px;cursor:pointer;">发送回复</button>
+        </div>
+    </div>
+
+    <!-- 管理员弹窗 -->
+    <div id="adminModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>管理员面板</h2>
+            <div id="loginArea">
+                <input type="password" id="adminPwd" placeholder="管理员密码">
+                <button id="doLogin">登录</button>
+            </div>
+            <div id="adminArea" style="display:none"></div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        let currentReplyPostId = null;
+        
+        // 字数统计
+        const contentTextarea = document.getElementById('content');
+        const charSpan = document.getElementById('charCount');
+        contentTextarea.addEventListener('input', function() {
+            charSpan.textContent = this.value.length;
+        });
+        
+        // 回复字数统计
+        const replyContent = document.getElementById('replyContent');
+        const replyCharSpan = document.getElementById('replyCharCount');
+        replyContent.addEventListener('input', function() {
+            replyCharSpan.textContent = this.value.length;
+        });
+        
+        // 图片上传
+        document.getElementById('uploadBtn').onclick = function() {
+            document.getElementById('imageInput').click();
+        };
+        
+        document.getElementById('imageInput').onchange = function(e) {
+            selectedFiles = Array.from(e.target.files).slice(0, 6);
+            const preview = document.getElementById('imagePreview');
+            preview.innerHTML = '';
+            selectedFiles.forEach((file, idx) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const div = document.createElement('div');
+                    div.className = 'preview-item';
+                    div.innerHTML = '<img src="' + e.target.result + '"><button class="remove-img" data-idx="' + idx + '">×</button>';
+                    preview.appendChild(div);
+                };
+                reader.readAsDataURL(file);
+            });
+        };
+        
+        document.getElementById('imagePreview').addEventListener('click', function(e) {
+            if (e.target.classList.contains('remove-img')) {
+                const idx = parseInt(e.target.getAttribute('data-idx'));
+                selectedFiles.splice(idx, 1);
+                document.getElementById('imageInput').files = null;
+                const preview = document.getElementById('imagePreview');
+                preview.innerHTML = '';
+                selectedFiles.forEach((file, i) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const div = document.createElement('div');
+                        div.className = 'preview-item';
+                        div.innerHTML = '<img src="' + e.target.result + '"><button class="remove-img" data-idx="' + i + '">×</button>';
+                        preview.appendChild(div);
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+        });
+        
+        // 加载帖子
+        async function loadPosts() {
+            try {
+                const res = await fetch('/api/posts');
+                const posts = await res.json();
+                const container = document.getElementById('postsContainer');
+                if (posts.length === 0) {
+                    container.innerHTML = '<div class="empty">暂无帖子，快来发布第一条吧</div>';
+                    return;
+                }
+                let html = '';
+                for (let post of posts) {
+                    html += '<div class="post" data-post-id="' + post.id + '">';
+                    html += '<div class="post-header"><span class="nickname">' + escapeHtml(post.nickname) + '</span><span class="time">' + new Date(post.createdAt).toLocaleString() + '</span></div>';
+                    html += '<div class="post-content">' + escapeHtml(post.content).replace(/\n/g, '<br>') + '</div>';
+                    if (post.images && post.images.length) {
+                        html += '<div class="post-images">';
+                        for (let img of post.images) {
+                            html += '<img src="' + img + '" onclick="window.open(\'' + img + '\')">';
+                        }
+                        html += '</div>';
+                    }
+                    html += '<div class="post-footer">';
+                    html += '<button class="like-btn" onclick="likePost(' + post.id + ', this)">❤️ <span class="like-count">' + post.likes + '</span></button>';
+                    html += '<button class="reply-btn" onclick="openReplyModal(' + post.id + ', \'' + escapeHtml(post.content).substring(0, 50) + '\')">💬 回复 (' + (post.replies ? post.replies.length : 0) + ')</button>';
+                    html += '</div>';
+                    
+                    // 显示回帖
+                    if (post.replies && post.replies.length > 0) {
+                        html += '<div class="replies-area">';
+                        for (let reply of post.replies) {
+                            html += '<div class="reply-item">';
+                            html += '<div class="reply-header"><span class="reply-nickname">' + escapeHtml(reply.nickname) + '</span><span class="reply-time">' + new Date(reply.createdAt).toLocaleString() + '</span></div>';
+                            html += '<div class="reply-content">' + escapeHtml(reply.content) + '</div>';
+                            html += '<button class="reply-like-btn" onclick="likeReply(' + post.id + ', ' + reply.id + ', this)">❤️ ' + reply.likes + '</button>';
+                            html += '</div>';
+                        }
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                }
+                container.innerHTML = html;
+            } catch(err) {
+                console.error(err);
+                document.getElementById('postsContainer').innerHTML = '<div class="empty">加载失败</div>';
+            }
+        }
+        
+        window.likePost = async function(id, btn) {
+            try {
+                const res = await fetch('/api/posts/' + id + '/like', { method: 'POST' });
+                const data = await res.json();
+                btn.querySelector('.like-count').textContent = data.likes;
+            } catch(err) {
+                alert('点赞失败');
+            }
+        };
+        
+        window.likeReply = async function(postId, replyId, btn) {
+            try {
+                const res = await fetch('/api/posts/' + postId + '/reply/' + replyId + '/like', { method: 'POST' });
+                const data = await res.json();
+                btn.textContent = '❤️ ' + data.likes;
+            } catch(err) {
+                alert('点赞失败');
+            }
+        };
+        
+        // 打开回帖弹窗
+        window.openReplyModal = function(postId, postContent) {
+            currentReplyPostId = postId;
+            document.getElementById('replyToPost').innerHTML = '回复：' + postContent + '...';
+            document.getElementById('replyContent').value = '';
+            document.getElementById('replyNickname').value = '';
+            replyCharSpan.textContent = '0';
+            document.getElementById('replyModal').style.display = 'block';
+        };
+        
+        // 提交回复
+        document.getElementById('submitReplyBtn').onclick = async function() {
+            const content = replyContent.value.trim();
+            const nickname = document.getElementById('replyNickname').value.trim();
+            
+            if (!content) {
+                alert('请输入回复内容');
+                return;
+            }
+            if (content.length > 300) {
+                alert('回复不能超过300字');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/posts/' + currentReplyPostId + '/reply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: content, nickname: nickname })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(data.message);
+                    document.getElementById('replyModal').style.display = 'none';
+                    loadPosts();
+                } else {
+                    alert(data.error);
+                }
+            } catch(err) {
+                alert('回复失败');
+            }
+        };
+        
+        // 发布帖子
+        document.getElementById('submitBtn').onclick = async function() {
+            const content = contentTextarea.value.trim();
+            const nickname = document.getElementById('nickname').value.trim();
+            
+            if (!content) {
+                alert('请输入内容');
+                return;
+            }
+            if (content.length > 500) {
+                alert('内容不能超过500字');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('content', content);
+            if (nickname) formData.append('nickname', nickname);
+            for (let file of selectedFiles) {
+                formData.append('images', file);
+            }
+            
+            try {
+                const res = await fetch('/api/posts', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(data.message);
+                    contentTextarea.value = '';
+                    document.getElementById('nickname').value = '';
+                    selectedFiles = [];
+                    document.getElementById('imagePreview').innerHTML = '';
+                    charSpan.textContent = '0';
+                    loadPosts();
+                } else {
+                    alert(data.error);
+                }
+            } catch(err) {
+                alert('发布失败');
+            }
+        };
+        
+        // 管理员功能（保持不变）
+        let adminPwd = '';
+        document.getElementById('doLogin').onclick = async function() {
+            const pwd = document.getElementById('adminPwd').value;
+            if (!pwd) { alert('请输入密码'); return; }
+            try {
+                const res = await fetch('/api/admin/posts', { headers: { 'admin-password': pwd } });
+                if (res.status === 401) { alert('密码错误'); return; }
+                adminPwd = pwd;
+                const posts = await res.json();
+                showAdminPanel(posts);
+            } catch(err) { alert('登录失败'); }
+        };
+        
+        function showAdminPanel(posts) {
+            const pending = posts.filter(p => p.status === 'pending');
+            const approved = posts.filter(p => p.status === 'approved');
+            let html = '<div style="margin-top:20px"><h3>待审核 (' + pending.length + ')</h3>';
+            if (pending.length === 0) html += '<p style="color:#999">暂无</p>';
+            else {
+                for (let post of pending) {
+                    html += '<div class="admin-post"><div><strong>' + escapeHtml(post.nickname) + '</strong> | ' + new Date(post.createdAt).toLocaleString() + '</div>';
+                    html += '<div style="margin:8px 0">' + escapeHtml(post.content) + '</div>';
+                    if (post.images && post.images.length) html += '<div style="font-size:12px;color:#666">图片 ' + post.images.length + ' 张</div>';
+                    html += '<div class="admin-actions"><button onclick="auditPost(' + post.id + ', \'approve\')">通过</button><button onclick="auditPost(' + post.id + ', \'reject\')">拒绝</button></div></div>';
+                }
+            }
+            html += '<h3 style="margin-top:20px">已通过 (' + approved.length + ')</h3>';
+            if (approved.length === 0) html += '<p style="color:#999">暂无</p>';
+            else {
+                for (let post of approved.slice(0, 10)) {
+                    html += '<div class="admin-post" style="opacity:0.7"><div><strong>' + escapeHtml(post.nickname) + '</strong> | ' + new Date(post.createdAt).toLocaleString() + '</div>';
+                    html += '<div>' + escapeHtml(post.content).substring(0, 100) + (post.content.length > 100 ? '...' : '') + '</div></div>';
+                }
+            }
+            html += '</div>';
+            document.getElementById('adminArea').innerHTML = html;
+            document.getElementById('adminArea').style.display = 'block';
+            document.getElementById('loginArea').style.display = 'none';
+        }
+        
+        window.auditPost = async function(id, action) {
+            try {
+                const res = await fetch('/api/admin/posts/' + id + '/audit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'admin-password': adminPwd },
+                    body: JSON.stringify({ action: action })
+                });
+                if (res.ok) {
+                    alert(action === 'approve' ? '已通过' : '已拒绝');
+                    const refreshRes = await fetch('/api/admin/posts', { headers: { 'admin-password': adminPwd } });
+                    const newPosts = await refreshRes.json();
+                    showAdminPanel(newPosts);
+                    loadPosts();
+                } else { alert('操作失败'); }
+            } catch(err) { alert('操作失败'); }
+        };
+        
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+        
+        // 弹窗逻辑
+        const adminModal = document.getElementById('adminModal');
+        const replyModal = document.getElementById('replyModal');
+        document.getElementById('adminBtn').onclick = function() {
+            document.getElementById('loginArea').style.display = 'block';
+            document.getElementById('adminArea').style.display = 'none';
+            document.getElementById('adminPwd').value = '';
+            adminModal.style.display = 'block';
+        };
+        document.querySelector('.close').onclick = function() { adminModal.style.display = 'none'; };
+        document.querySelector('.close-reply').onclick = function() { replyModal.style.display = 'none'; };
+        window.onclick = function(e) {
+            if (e.target === adminModal) adminModal.style.display = 'none';
+            if (e.target === replyModal) replyModal.style.display = 'none';
+        };
+        
+        loadPosts();
+    </script>
+</body>
+</html>
